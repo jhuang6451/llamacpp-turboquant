@@ -1,5 +1,5 @@
 # ==============================================================================
-# Multi-stage Dockerfile for llama.cpp with TurboQuant and CUDA 13.3+ Support
+# Multi-stage Dockerfile for llama.cpp with TurboQuant and CUDA Support
 # ==============================================================================
 
 ARG CUDA_VERSION=13.3.0
@@ -13,12 +13,11 @@ FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} AS builder
 # Build arguments
 ARG REPO_URL=https://github.com/TheTom/llama-cpp-turboquant.git
 ARG REPO_REF=master
-ARG CUDA_DOCKER_ARCH="75;80;86;89;90;100;120"
-ARG CMAKE_EXTRA_FLAGS="-DGGML_CUDA_FA_ALL_QUANTS=ON -DGGML_CUDA_GRAPHS=ON"
+ARG CUDA_DOCKER_ARCH="75;80;86;89;90"
+ARG CMAKE_EXTRA_FLAGS="-DGGML_CUDA_FA_ALL_QUANTS=ON"
 
 # Set environment
-ENV DEBIAN_FRONTEND=noninteractive \
-    CUDA_DOCKER_ARCH=${CUDA_DOCKER_ARCH}
+ENV DEBIAN_FRONTEND=noninteractive
 
 # Install essential build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -30,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     pkg-config \
     libcurl4-openssl-dev \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Clone the target llama.cpp repository (TurboQuant fork or official)
@@ -39,20 +39,29 @@ RUN git clone --depth 1 --branch ${REPO_REF} ${REPO_URL} llama.cpp \
 
 WORKDIR /src/llama.cpp
 
-# Configure and compile with CMake
-RUN cmake -B build -G Ninja \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DGGML_CUDA=ON \
-    -DGGML_NATIVE=OFF \
-    -DGGML_BUILD_TESTS=OFF \
-    -DGGML_BUILD_EXAMPLES=ON \
-    -DGGML_BUILD_SERVER=ON \
-    -DGGML_CURL=ON \
-    -DCMAKE_CUDA_ARCHITECTURES="${CUDA_DOCKER_ARCH}" \
-    ${CMAKE_EXTRA_FLAGS} \
-    && cmake --build build --config Release -j$(nproc)
+# Configure CUDA architectures and CMake options
+RUN if [ -n "${CUDA_DOCKER_ARCH}" ] && [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
+        export ARCH_ARG="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
+    else \
+        export ARCH_ARG=""; \
+    fi && \
+    cmake -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGGML_CUDA=ON \
+        -DGGML_NATIVE=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DGGML_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_EXAMPLES=ON \
+        -DLLAMA_BUILD_SERVER=ON \
+        -DGGML_CURL=ON \
+        -DLLAMA_CURL=ON \
+        -DCMAKE_EXE_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
+        ${ARCH_ARG} \
+        ${CMAKE_EXTRA_FLAGS} \
+        . && \
+    cmake --build build --config Release -j$(nproc)
 
-# Stage all built binaries into a single directory for easy transfer
+# Stage all built binaries and libraries into /dist
 RUN mkdir -p /dist/bin /dist/lib && \
     find build/bin -maxdepth 1 -type f -executable -exec cp {} /dist/bin/ \; || true && \
     find build -name "*.so*" -exec cp -P {} /dist/lib/ \; 2>/dev/null || true
@@ -63,7 +72,7 @@ RUN mkdir -p /dist/bin /dist/lib && \
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runner
 
 LABEL maintainer="Antigravity AI" \
-      description="llama.cpp with TurboQuant KV Cache Compression & CUDA 13.3+ Acceleration" \
+      description="llama.cpp with TurboQuant KV Cache Compression & CUDA Acceleration" \
       org.opencontainers.image.source="https://github.com/TheTom/llama-cpp-turboquant"
 
 ENV DEBIAN_FRONTEND=noninteractive \
