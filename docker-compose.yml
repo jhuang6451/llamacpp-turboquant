@@ -1,14 +1,7 @@
 services:
   llama-server:
-    image: ghcr.io/${IMAGE_NAME:-your-username/llamacpp_tq}:cuda13.3.0
-    # Or build locally:
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile
-    #   args:
-    #     CUDA_VERSION: "13.3.0"
-    #     UBUNTU_VERSION: "24.04"
-    container_name: llama-server-turboquant
+    image: ghcr.io/${IMAGE_NAME:-your-username/llamacpp_tq}:rtx50
+    container_name: llama-server-turboquant-rtx50
     restart: unless-stopped
     ports:
       - "8080:8080"

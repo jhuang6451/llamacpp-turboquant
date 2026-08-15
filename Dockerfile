@@ -1,5 +1,6 @@
 # ==============================================================================
-# Multi-stage Dockerfile for llama.cpp with TurboQuant and CUDA Support
+# Multi-stage Dockerfile for llama.cpp with TurboQuant and CUDA 13.3+
+# Tailored and Optimized for NVIDIA GeForce RTX 50-Series (Blackwell, sm_120)
 # ==============================================================================
 
 ARG CUDA_VERSION=13.3.0
@@ -10,16 +11,18 @@ ARG UBUNTU_VERSION=24.04
 # ------------------------------------------------------------------------------
 FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} AS builder
 
-# Build arguments
+# Build arguments - Targeted exclusively for RTX 50-series (Compute Capability 12.0)
 ARG REPO_URL=https://github.com/TheTom/llama-cpp-turboquant.git
 ARG REPO_REF=master
-ARG CUDA_DOCKER_ARCH="75;80;86;89;90"
+ARG CUDA_DOCKER_ARCH="120"
 ARG CMAKE_EXTRA_FLAGS="-DGGML_CUDA_FA_ALL_QUANTS=ON"
 
 # Set environment
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    CCACHE_DIR=/root/.ccache \
+    PATH="/usr/lib/ccache:$PATH"
 
-# Install essential build dependencies
+# Install essential build dependencies + ccache
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
@@ -30,23 +33,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libcurl4-openssl-dev \
     libgomp1 \
+    ccache \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone the target llama.cpp repository (TurboQuant fork or official)
+# Clone target repository
 WORKDIR /src
 RUN git clone --depth 1 --branch ${REPO_REF} ${REPO_URL} llama.cpp \
     || (git clone ${REPO_URL} llama.cpp && cd llama.cpp && git checkout ${REPO_REF})
 
 WORKDIR /src/llama.cpp
 
-# Configure CUDA architectures and CMake options
-RUN if [ -n "${CUDA_DOCKER_ARCH}" ] && [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
-        export ARCH_ARG="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
-    else \
-        export ARCH_ARG=""; \
-    fi && \
+# Configure and compile with CMake + ccache for RTX 50-series (sm_120)
+RUN --mount=type=cache,target=/root/.ccache \
     cmake -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache \
         -DGGML_CUDA=ON \
         -DGGML_NATIVE=OFF \
         -DLLAMA_BUILD_TESTS=OFF \
@@ -56,12 +59,12 @@ RUN if [ -n "${CUDA_DOCKER_ARCH}" ] && [ "${CUDA_DOCKER_ARCH}" != "default" ]; t
         -DGGML_CURL=ON \
         -DLLAMA_CURL=ON \
         -DCMAKE_EXE_LINKER_FLAGS="-Wl,--allow-shlib-undefined" \
-        ${ARCH_ARG} \
+        -DCMAKE_CUDA_ARCHITECTURES="${CUDA_DOCKER_ARCH}" \
         ${CMAKE_EXTRA_FLAGS} \
         . && \
     cmake --build build --config Release -j$(nproc)
 
-# Stage all built binaries and libraries into /dist
+# Stage built binaries and shared libraries into /dist
 RUN mkdir -p /dist/bin /dist/lib && \
     find build/bin -maxdepth 1 -type f -executable -exec cp {} /dist/bin/ \; || true && \
     find build -name "*.so*" -exec cp -P {} /dist/lib/ \; 2>/dev/null || true
@@ -72,7 +75,7 @@ RUN mkdir -p /dist/bin /dist/lib && \
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runner
 
 LABEL maintainer="Antigravity AI" \
-      description="llama.cpp with TurboQuant KV Cache Compression & CUDA Acceleration" \
+      description="llama.cpp with TurboQuant KV Cache Compression & CUDA 13.3 (RTX 50-Series Blackwell Optimized)" \
       org.opencontainers.image.source="https://github.com/TheTom/llama-cpp-turboquant"
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -108,6 +111,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:${LLAMA_ARG_PORT}/health || exit 1
 
-# Default to running llama-server
 ENTRYPOINT ["llama-server"]
 CMD ["--host", "0.0.0.0", "--port", "8080"]

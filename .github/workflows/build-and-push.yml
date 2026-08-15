@@ -1,4 +1,4 @@
-name: Build llama.cpp TurboQuant CUDA Docker Image
+name: Build llama.cpp TurboQuant CUDA 13.3 (RTX 50-Series Only)
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       cuda_version:
-        description: 'NVIDIA CUDA Toolkit Version (e.g. 13.3.0 or 12.8.1)'
+        description: 'NVIDIA CUDA Toolkit Version'
         required: true
         default: '13.3.0'
         type: string
@@ -30,9 +30,9 @@ on:
         default: 'master'
         type: string
       cuda_arch:
-        description: 'Target CUDA Architectures (e.g., 75;80;86;89;90 or default)'
+        description: 'Target CUDA Architecture (120 for RTX 50-series: 5090/5080/5070)'
         required: true
-        default: '75;80;86;89;90'
+        default: '120'
         type: string
       push_to_ghcr:
         description: 'Push image to GitHub Container Registry (GHCR)'
@@ -45,7 +45,7 @@ on:
         default: false
         type: boolean
       custom_tag:
-        description: 'Optional custom image tag (e.g. cuda13.3-latest)'
+        description: 'Optional custom image tag (e.g. rtx50-turboquant)'
         required: false
         default: ''
         type: string
@@ -56,7 +56,7 @@ env:
 
 jobs:
   build:
-    name: Build & Push Docker Image
+    name: Build & Push RTX 50-Series Docker Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -102,14 +102,13 @@ jobs:
           UBUNTU_VER="${{ inputs.ubuntu_version || '24.04' }}"
           REPO_URL="${{ inputs.repo_url || 'https://github.com/TheTom/llama-cpp-turboquant.git' }}"
           REPO_REF="${{ inputs.repo_ref || 'master' }}"
-          CUDA_ARCH="${{ inputs.cuda_arch || '75;80;86;89;90' }}"
+          CUDA_ARCH="${{ inputs.cuda_arch || '120' }}"
           CUSTOM_TAG="${{ inputs.custom_tag || '' }}"
 
           GHCR_IMAGE="${{ env.REGISTRY_GHCR }}/${{ github.repository }}"
-          # Convert to lowercase
           GHCR_IMAGE=$(echo "${GHCR_IMAGE}" | tr '[:upper:]' '[:lower:]')
 
-          TAGS="${GHCR_IMAGE}:cuda${CUDA_VER},${GHCR_IMAGE}:latest"
+          TAGS="${GHCR_IMAGE}:cuda${CUDA_VER}-rtx50,${GHCR_IMAGE}:rtx50,${GHCR_IMAGE}:latest"
           if [ -n "${CUSTOM_TAG}" ]; then
             TAGS="${TAGS},${GHCR_IMAGE}:${CUSTOM_TAG}"
           fi
@@ -140,20 +139,19 @@ jobs:
 
       - name: Output summary
         run: |
-          echo "### 🚀 Image Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 RTX 50-Series (Blackwell) Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Base CUDA Version:** \`${{ steps.meta-vars.outputs.cuda_ver }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Ubuntu Version:** \`${{ steps.meta-vars.outputs.ubuntu_ver }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target GPU Architecture:** \`sm_120\` (RTX 5090 / 5080 / 5070)" >> $GITHUB_STEP_SUMMARY
           echo "- **Source Repository:** \`${{ steps.meta-vars.outputs.repo_url }}\` (\`${{ steps.meta-vars.outputs.repo_ref }}\`)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Target GPU Architectures:** \`${{ steps.meta-vars.outputs.cuda_arch }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "#### 📦 Pull Image Command:" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ steps.meta-vars.outputs.ghcr_image }}:cuda${{ steps.meta-vars.outputs.cuda_ver }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ steps.meta-vars.outputs.ghcr_image }}:rtx50" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### ⚡ Run llama-server with TurboQuant:" >> $GITHUB_STEP_SUMMARY
+          echo "#### ⚡ Run llama-server on RTX 50-series with TurboQuant:" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
           echo "docker run --gpus all -p 8080:8080 -v /path/to/models:/models \\" >> $GITHUB_STEP_SUMMARY
-          echo "  ${{ steps.meta-vars.outputs.ghcr_image }}:cuda${{ steps.meta-vars.outputs.cuda_ver }} \\" >> $GITHUB_STEP_SUMMARY
+          echo "  ${{ steps.meta-vars.outputs.ghcr_image }}:rtx50 \\" >> $GITHUB_STEP_SUMMARY
           echo "  -m /models/your-model.gguf -ngl 99 -fa 1 -ctk turbo4 -ctv turbo4" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
