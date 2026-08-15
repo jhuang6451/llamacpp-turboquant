@@ -1,0 +1,159 @@
+name: Build llama.cpp TurboQuant CUDA 13.3 Docker Image
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      cuda_version:
+        description: 'NVIDIA CUDA Toolkit Version'
+        required: true
+        default: '13.3.0'
+        type: string
+      ubuntu_version:
+        description: 'Ubuntu Base Image Version'
+        required: true
+        default: '24.04'
+        type: string
+      repo_url:
+        description: 'llama.cpp (or TurboQuant fork) Git Repository URL'
+        required: true
+        default: 'https://github.com/TheTom/llama-cpp-turboquant.git'
+        type: string
+      repo_ref:
+        description: 'Git Branch / Tag / Commit SHA to checkout'
+        required: true
+        default: 'master'
+        type: string
+      cuda_arch:
+        description: 'Target CUDA Architectures (Semicolon-separated, e.g., 75;80;86;89;90;100;120 or all)'
+        required: true
+        default: '75;80;86;89;90;100;120'
+        type: string
+      push_to_ghcr:
+        description: 'Push image to GitHub Container Registry (GHCR)'
+        required: true
+        default: true
+        type: boolean
+      push_to_dockerhub:
+        description: 'Push image to Docker Hub (Requires DOCKERHUB_USERNAME & DOCKERHUB_TOKEN secrets)'
+        required: false
+        default: false
+        type: boolean
+      custom_tag:
+        description: 'Optional custom image tag (e.g. cuda13.3-latest)'
+        required: false
+        default: ''
+        type: string
+
+env:
+  REGISTRY_GHCR: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Free disk space on runner
+        run: |
+          echo "Cleaning up disk space..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.push_to_ghcr }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_GHCR }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_to_dockerhub && env.DOCKERHUB_USERNAME != '' }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Determine parameters and tags
+        id: meta-vars
+        run: |
+          CUDA_VER="${{ inputs.cuda_version || '13.3.0' }}"
+          UBUNTU_VER="${{ inputs.ubuntu_version || '24.04' }}"
+          REPO_URL="${{ inputs.repo_url || 'https://github.com/TheTom/llama-cpp-turboquant.git' }}"
+          REPO_REF="${{ inputs.repo_ref || 'master' }}"
+          CUDA_ARCH="${{ inputs.cuda_arch || '75;80;86;89;90;100;120' }}"
+          CUSTOM_TAG="${{ inputs.custom_tag || '' }}"
+
+          GHCR_IMAGE="${{ env.REGISTRY_GHCR }}/${{ github.repository }}"
+          # Convert to lowercase
+          GHCR_IMAGE=$(echo "${GHCR_IMAGE}" | tr '[:upper:]' '[:lower:]')
+
+          TAGS="${GHCR_IMAGE}:cuda${CUDA_VER},${GHCR_IMAGE}:latest"
+          if [ -n "${CUSTOM_TAG}" ]; then
+            TAGS="${TAGS},${GHCR_IMAGE}:${CUSTOM_TAG}"
+          fi
+
+          echo "cuda_ver=${CUDA_VER}" >> $GITHUB_OUTPUT
+          echo "ubuntu_ver=${UBUNTU_VER}" >> $GITHUB_OUTPUT
+          echo "repo_url=${REPO_URL}" >> $GITHUB_OUTPUT
+          echo "repo_ref=${REPO_REF}" >> $GITHUB_OUTPUT
+          echo "cuda_arch=${CUDA_ARCH}" >> $GITHUB_OUTPUT
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "ghcr_image=${GHCR_IMAGE}" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-vars.outputs.tags }}
+          build-args: |
+            CUDA_VERSION=${{ steps.meta-vars.outputs.cuda_ver }}
+            UBUNTU_VERSION=${{ steps.meta-vars.outputs.ubuntu_ver }}
+            REPO_URL=${{ steps.meta-vars.outputs.repo_url }}
+            REPO_REF=${{ steps.meta-vars.outputs.repo_ref }}
+            CUDA_DOCKER_ARCH=${{ steps.meta-vars.outputs.cuda_arch }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Output summary
+        run: |
+          echo "### 🚀 Image Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Base CUDA Version:** \`${{ steps.meta-vars.outputs.cuda_ver }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Ubuntu Version:** \`${{ steps.meta-vars.outputs.ubuntu_ver }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Source Repository:** \`${{ steps.meta-vars.outputs.repo_url }}\` (\`${{ steps.meta-vars.outputs.repo_ref }}\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target GPU Architectures:** \`${{ steps.meta-vars.outputs.cuda_arch }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 📦 Pull Image Command:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ steps.meta-vars.outputs.ghcr_image }}:cuda${{ steps.meta-vars.outputs.cuda_ver }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### ⚡ Run llama-server with TurboQuant (KV cache 4-bit):" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker run --gpus all -p 8080:8080 -v /path/to/models:/models \\" >> $GITHUB_STEP_SUMMARY
+          echo "  ${{ steps.meta-vars.outputs.ghcr_image }}:cuda${{ steps.meta-vars.outputs.cuda_ver }} \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -m /models/your-model.gguf -ngl 99 -fa 1 -ctk turbo4 -ctv turbo4" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
