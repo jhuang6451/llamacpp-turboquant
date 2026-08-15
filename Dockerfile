@@ -99,10 +99,8 @@ COPY --from=builder /dist/bin/ /usr/local/bin/
 COPY --from=builder /dist/lib/ /usr/local/lib/
 RUN ldconfig
 
-# Create non-root user and directory for model weights
-RUN useradd -m -u 1000 llama && \
-    mkdir -p /models && \
-    chown -R llama:llama /models
+# Create directory for model weights
+RUN mkdir -p /models && chmod 777 /models
 
 WORKDIR /models
 EXPOSE 8080
